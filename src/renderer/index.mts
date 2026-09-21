@@ -2,6 +2,7 @@ import { AudioLevelSmoother, samplesToDbfs } from "./audio-level.mjs";
 import { MouthStateSelector, type MouthState } from "./mouth-state.mjs";
 
 const START_SYSTEM_AUDIO_EVENT = "desktop-pet:start-system-audio";
+const STOP_SYSTEM_AUDIO_EVENT = "desktop-pet:stop-system-audio";
 const SAMPLE_INTERVAL_MS = 50;
 
 const SPRITE_PATHS: Record<MouthState, string> = {
@@ -12,6 +13,9 @@ const SPRITE_PATHS: Record<MouthState, string> = {
 
 const petSprite = document.querySelector<HTMLImageElement>(".pet-sprite");
 let renderedState: MouthState = "idle";
+let activeCleanup: (() => Promise<void>) | null = null;
+let monitoringEnabled = false;
+let restartAfterCleanup = false;
 
 function renderMouthState(state: MouthState): void {
   if (!petSprite || state === renderedState) {
@@ -28,49 +32,69 @@ async function monitorSystemAudio(): Promise<void> {
     return;
   }
 
+  if (activeCleanup !== null) {
+    restartAfterCleanup = true;
+    return;
+  }
+
   let stream: MediaStream | null = null;
   let audioContext: AudioContext | null = null;
   let sourceNode: MediaStreamAudioSourceNode | null = null;
   let intervalId: number | null = null;
-  let cleanupStarted = false;
+  let stopped = false;
 
   const cleanup = async (): Promise<void> => {
-    if (cleanupStarted) {
-      return;
-    }
-
-    cleanupStarted = true;
+    stopped = true;
 
     if (intervalId !== null) {
       window.clearInterval(intervalId);
       intervalId = null;
     }
 
-    for (const track of stream?.getTracks() ?? []) {
+    const currentStream = stream;
+    stream = null;
+
+    for (const track of currentStream?.getTracks() ?? []) {
       track.stop();
     }
 
-    stream = null;
     sourceNode?.disconnect();
     sourceNode = null;
 
-    if (audioContext && audioContext.state !== "closed") {
+    const currentAudioContext = audioContext;
+    audioContext = null;
+    renderMouthState("idle");
+
+    if (currentAudioContext && currentAudioContext.state !== "closed") {
       try {
-        await audioContext.close();
+        await currentAudioContext.close();
       } catch (error: unknown) {
         console.error("Failed to close the system audio context:", error);
       }
     }
 
-    audioContext = null;
-    renderMouthState("idle");
+    if (activeCleanup === cleanup) {
+      activeCleanup = null;
+
+      if (restartAfterCleanup && monitoringEnabled) {
+        restartAfterCleanup = false;
+        void monitorSystemAudio();
+      }
+    }
   };
+
+  activeCleanup = cleanup;
 
   try {
     stream = await navigator.mediaDevices.getDisplayMedia({
       video: true,
       audio: true,
     });
+
+    if (stopped) {
+      await cleanup();
+      return;
+    }
 
     for (const videoTrack of stream.getVideoTracks()) {
       videoTrack.stop();
@@ -85,6 +109,11 @@ async function monitorSystemAudio(): Promise<void> {
 
     audioContext = new AudioContext();
     await audioContext.resume();
+
+    if (stopped) {
+      await cleanup();
+      return;
+    }
 
     sourceNode = audioContext.createMediaStreamSource(stream);
     const analyserNode = audioContext.createAnalyser();
@@ -109,15 +138,34 @@ async function monitorSystemAudio(): Promise<void> {
       { once: true },
     );
   } catch (error: unknown) {
+    const wasStopped = stopped;
     await cleanup();
-    console.error("System audio capture is unavailable; remaining idle:", error);
+
+    if (!wasStopped) {
+      console.error(
+        "System audio capture is unavailable; remaining idle:",
+        error,
+      );
+    }
   }
 }
 
-window.addEventListener(
-  START_SYSTEM_AUDIO_EVENT,
-  () => {
-    void monitorSystemAudio();
-  },
-  { once: true },
-);
+window.addEventListener(START_SYSTEM_AUDIO_EVENT, () => {
+  if (monitoringEnabled) {
+    return;
+  }
+
+  monitoringEnabled = true;
+  void monitorSystemAudio();
+});
+
+window.addEventListener(STOP_SYSTEM_AUDIO_EVENT, () => {
+  monitoringEnabled = false;
+  restartAfterCleanup = false;
+
+  if (activeCleanup) {
+    void activeCleanup();
+  } else {
+    renderMouthState("idle");
+  }
+});
