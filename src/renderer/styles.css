@@ -13,4 +13,5 @@ body {
   height: 100%;
   object-fit: contain;
   user-select: none;
+  app-region: drag;
 }
