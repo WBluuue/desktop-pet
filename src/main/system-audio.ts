@@ -1,6 +1,7 @@
 import { desktopCapturer, type BrowserWindow } from "electron";
 
 const START_SYSTEM_AUDIO_EVENT = "desktop-pet:start-system-audio";
+const STOP_SYSTEM_AUDIO_EVENT = "desktop-pet:stop-system-audio";
 
 type DisplayMediaCallback = (streams: Electron.Streams) => void;
 
@@ -76,12 +77,28 @@ export function startSystemAudioCapture(petWindow: BrowserWindow): void {
     return;
   }
 
+  dispatchSystemAudioEvent(petWindow, START_SYSTEM_AUDIO_EVENT, true);
+}
+
+export function stopSystemAudioCapture(petWindow: BrowserWindow): void {
+  dispatchSystemAudioEvent(petWindow, STOP_SYSTEM_AUDIO_EVENT, false);
+}
+
+function dispatchSystemAudioEvent(
+  petWindow: BrowserWindow,
+  eventName: string,
+  userGesture: boolean,
+): void {
+  if (petWindow.isDestroyed() || petWindow.webContents.isDestroyed()) {
+    return;
+  }
+
   void petWindow.webContents
     .executeJavaScript(
-      `window.dispatchEvent(new Event(${JSON.stringify(START_SYSTEM_AUDIO_EVENT)}))`,
-      true,
+      `window.dispatchEvent(new Event(${JSON.stringify(eventName)}))`,
+      userGesture,
     )
     .catch((error: unknown) => {
-      console.error("Failed to request system audio capture:", error);
+      console.error(`Failed to dispatch ${eventName}:`, error);
     });
 }
