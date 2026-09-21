@@ -2,6 +2,11 @@ import { join } from "node:path";
 
 import { app, BrowserWindow } from "electron";
 
+import {
+  installSystemAudioCaptureHandler,
+  startSystemAudioCapture,
+} from "./system-audio.js";
+
 let petWindow: BrowserWindow | null = null;
 
 async function createPetWindow(): Promise<void> {
@@ -23,9 +28,13 @@ async function createPetWindow(): Promise<void> {
     petWindow = null;
   });
 
+  installSystemAudioCaptureHandler(petWindow);
+
   await petWindow.loadFile(
     join(app.getAppPath(), "src", "renderer", "index.html"),
   );
+
+  startSystemAudioCapture(petWindow);
 }
 
 void app
